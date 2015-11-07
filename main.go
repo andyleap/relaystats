@@ -154,7 +154,7 @@ table, th, td {
 <td colspan="10">{{.Error}}</td>
 {{else}}
 {{with .Status}}
-<td>{{Bytes .BytesProxied}}</td><td>{{.NumActiveSessions}}</td><td>{{.NumConnections}}</td>{{range .Rates}}<td>{{.}}</td>{{end}}<td>{{.Options.ProvidedBy}}</td>
+<td>{{.NumActiveSessions}}</td><td>{{.NumConnections}}</td><td>{{Bytes .BytesProxied}}</td>{{range .Rates}}<td>{{.}}</td>{{end}}<td>{{.Options.ProvidedBy}}</td>
 {{end}}
 {{end}}
 </tr>
