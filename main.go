@@ -147,14 +147,14 @@ table, th, td {
 </head>
 <body>
 <table>
-<tr><th>Relay URL</th><th>Bytes Proxied</th><th>10 s</th><th>1 m</th><th>5 m</th><th>15 m</th><th>30 m</th><th>60 m</th><th>Provided by</th></tr>
+<tr><th>Relay URL</th><th>Active Sessions</th><th>Connections</th><th>Bytes Proxied</th><th>10 s</th><th>1 m</th><th>5 m</th><th>15 m</th><th>30 m</th><th>60 m</th><th>Provided by</th></tr>
 {{range .Relays}}
 <tr><td>{{.Url}}</td>
 {{if .Error}}
-<td colspan="8">{{.Error}}</td>
+<td colspan="10">{{.Error}}</td>
 {{else}}
 {{with .Status}}
-<td>{{Bytes .BytesProxied}}</td>{{range .Rates}}<td>{{.}}</td>{{end}}<td>{{.Options.ProvidedBy}}</td>
+<td>{{Bytes .BytesProxied}}</td><td>{{.NumActiveSessions}}</td><td>{{.NumConnections}}</td>{{range .Rates}}<td>{{.}}</td>{{end}}<td>{{.Options.ProvidedBy}}</td>
 {{end}}
 {{end}}
 </tr>
@@ -173,7 +173,7 @@ type RelayInfo struct {
 
 func Status(rw http.ResponseWriter, req *http.Request) {
 	relayData := []RelayInfo{}
-
+	relayTotal := &RelayStatus{Rates: make([]uint64, 6)}
 	db.View(func(tx *bolt.Tx) error {
 		timestats := tx.Bucket([]byte(`TIMESTATS`))
 		latestkey, _ := timestats.Cursor().Last()
@@ -185,10 +185,24 @@ func Status(rw http.ResponseWriter, req *http.Request) {
 				Url:    string(k),
 				Status: rs,
 			}
+			relayTotal.BytesProxied += rs.BytesProxied
+			relayTotal.NumActiveSessions += rs.NumActiveSessions
+			relayTotal.NumConnections += rs.NumConnections
+			relayTotal.Rates[0] += rs.Rates[0]
+			relayTotal.Rates[1] += rs.Rates[1]
+			relayTotal.Rates[2] += rs.Rates[2]
+			relayTotal.Rates[3] += rs.Rates[3]
+			relayTotal.Rates[4] += rs.Rates[4]
+			relayTotal.Rates[5] += rs.Rates[5]
 			relayData = append(relayData, ri)
 			return nil
 		})
 		return nil
+	})
+	
+	relayData = append(relayData, RelayInfo{
+		Url: "Totals",
+		Status: relayTotal,
 	})
 
 	err := mainTmpl.ExecuteTemplate(rw, "main", struct {
