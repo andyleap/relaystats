@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"html/template"
 	"io/ioutil"
@@ -15,6 +16,12 @@ import (
 	"github.com/andyleap/boltinspect"
 	"github.com/boltdb/bolt"
 	"github.com/dustin/go-humanize"
+	"github.com/influxdb/influxdb/client/v2"
+)
+
+var (
+	influxUser = flag.String("u", "", "InfluxDB User")
+	influxPass = flag.String("p", "", "InfluxDB Password")
 )
 
 type RelayStatus struct {
@@ -58,10 +65,19 @@ func GetRelays() []string {
 }
 
 var (
-	db *bolt.DB
+	db     *bolt.DB
+	influx client.Client
 )
 
 func main() {
+	flag.Parse()
+
+	u, _ := url.Parse("http://localhost:8086")
+	influx = client.NewClient(client.Config{
+		URL:      u,
+		Username: *influxUser,
+		Password: *influxPass,
+	})
 
 	mainTmpl = template.Must(template.New("main").Funcs(template.FuncMap{
 		"Bytes": humanize.IBytes,
@@ -112,16 +128,33 @@ func WatchRelays() {
 			wg.Wait()
 			close(rchan)
 		}()
+		bp, _ := client.NewBatchPoints(client.BatchPointsConfig{
+			Database:  "syncthingrelay",
+			Precision: "s",
+		})
+		allTime := time.Now()
 		db.Update(func(tx *bolt.Tx) error {
 			timestats := tx.Bucket([]byte(`TIMESTATS`))
 			now, _ := timestats.CreateBucket([]byte(time.Now().Format(time.RFC3339)))
 			for ri := range rchan {
 				data, _ := json.Marshal(ri.Status)
 				now.Put([]byte(ri.Url), data)
+				tags := map[string]string{"relay": ri.Url}
+				fields := map[string]interface{}{
+					"10s": ri.Status.Rates[0],
+					"1m":  ri.Status.Rates[1],
+					"5m":  ri.Status.Rates[2],
+					"15m": ri.Status.Rates[3],
+					"30m": ri.Status.Rates[4],
+					"60m": ri.Status.Rates[5],
+				}
+				pt, _ := client.NewPoint("bandwidth", tags, fields, allTime)
+				bp.AddPoint(pt)
 				wg.Done()
 			}
 			return nil
 		})
+		influx.Write(bp)
 		time.Sleep(5 * time.Second)
 	}
 }
