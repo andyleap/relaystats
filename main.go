@@ -1,24 +1,28 @@
 package main
 
 import (
-	"sort"
-	"sync"
-	"html/template"
-	"time"
-	"io/ioutil"
-	"fmt"
-	"net/http"
 	"encoding/json"
+	"fmt"
+	"html/template"
+	"io/ioutil"
+	"log"
+	"net/http"
 	"net/url"
 	"strings"
-	"github.com/pmylund/go-cache"
+	"sync"
+	"time"
+
+	"github.com/andyleap/boltinspect"
+	"github.com/boltdb/bolt"
 	"github.com/dustin/go-humanize"
 )
 
-type RelayStatus struct{
-	BytesProxied uint64 `json:"bytesProxied"`
-	Rates []uint64 `json:"kbps10s1m5m15m30m60m"`
-	Options struct {
+type RelayStatus struct {
+	BytesProxied      uint64   `json:"bytesProxied"`
+	NumActiveSessions uint64   `json:"numActiveSessions"`
+	NumConnections    uint64   `json:"numConnections"`
+	Rates             []uint64 `json:"kbps10s1m5m15m30m60m"`
+	Options           struct {
 		ProvidedBy string `json:"provided-by"`
 	} `json:"options"`
 }
@@ -29,27 +33,19 @@ func GetStatus(relay string) (relayurl string, status *RelayStatus, err error) {
 	host := strings.Split(purl.Host, ":")[0]
 	relayurl = purl.Host
 	statusUrl := fmt.Sprintf("http://%s%s/status", host, values.Get("statusAddr"))
-	if status, ok := dataCache.Get(statusUrl); ok {
-		return relayurl, status.(*RelayStatus), nil
-	}
 	resp, err := http.Get(statusUrl)
 	if err != nil {
-	        return relayurl, nil, err
+		return relayurl, nil, err
 	}
 	data, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-	        return relayurl, nil, err
+		return relayurl, nil, err
 	}
 	err = json.Unmarshal(data, &status)
-	
-	dataCache.Set(statusUrl, status, cache.DefaultExpiration)
 	return
 }
 
 func GetRelays() []string {
-	if relays, ok := dataCache.Get("relays"); ok {
-		return relays.([]string)
-	}
 	resp, _ := http.Get("https://relays.syncthing.net/endpoint")
 	body, _ := ioutil.ReadAll(resp.Body)
 	var relaydata map[string]interface{}
@@ -58,24 +54,76 @@ func GetRelays() []string {
 	for _, relay := range relaydata["relays"].([]interface{}) {
 		relays = append(relays, (relay.(map[string]interface{}))["url"].(string))
 	}
-	dataCache.Set("relays", relays, cache.DefaultExpiration)
 	return relays
 }
 
 var (
-	dataCache *cache.Cache
+	db *bolt.DB
 )
 
 func main() {
-	dataCache = cache.New(30 * time.Second, 5 * time.Second)
+
 	mainTmpl = template.Must(template.New("main").Funcs(template.FuncMap{
 		"Bytes": humanize.IBytes,
 	}).Parse(mainTmplText))
-	
+
 	http.HandleFunc("/", Status)
+	var err error
+	db, err = bolt.Open("/opt/relaystats/relaystats.db", 0666, &bolt.Options{})
+	if err != nil {
+		log.Fatalf("Error, cannot open db: %s", err)
+	}
+
+	db.Update(func(tx *bolt.Tx) error {
+		tx.CreateBucketIfNotExists([]byte(`TIMESTATS`))
+		return nil
+	})
+
+	dbinspect := boltinspect.New(db)
+	http.HandleFunc("/bolt", dbinspect.InspectEndpoint)
+
+	go WatchRelays()
 	http.ListenAndServe(":20000", nil)
-	
-	
+}
+
+func WatchRelays() {
+	nextRelaysPoll := time.Now()
+	relays := []string{}
+	for {
+		if time.Now().After(nextRelaysPoll) {
+			relays = GetRelays()
+			nextRelaysPoll = nextRelaysPoll.Add(60 * time.Second)
+		}
+		rchan := make(chan *RelayInfo, 2)
+		wg := &sync.WaitGroup{}
+
+		for _, relay := range relays {
+			wg.Add(1)
+			go func(relay string) {
+				relayurl, status, err := GetStatus(relay)
+				if err != nil {
+					wg.Done()
+					return
+				}
+				rchan <- &RelayInfo{Url: relayurl, Status: status}
+			}(relay)
+		}
+		go func() {
+			wg.Wait()
+			close(rchan)
+		}()
+		db.Update(func(tx *bolt.Tx) error {
+			timestats := tx.Bucket([]byte(`TIMESTATS`))
+			now, _ := timestats.CreateBucket([]byte(time.Now().Format(time.RFC3339)))
+			for ri := range rchan {
+				data, _ := json.Marshal(ri.Status)
+				now.Put([]byte(ri.Url), data)
+				wg.Done()
+			}
+			return nil
+		})
+		time.Sleep(5 * time.Second)
+	}
 }
 
 var mainTmpl *template.Template
@@ -114,33 +162,32 @@ table, th, td {
 `
 
 type RelayInfo struct {
-	Url string
-	Error error
+	Url    string
+	Error  error
 	Status *RelayStatus
 }
 
 func Status(rw http.ResponseWriter, req *http.Request) {
-	relays := GetRelays()
-	relayData := make([]RelayInfo, len(relays))
-	wg := &sync.WaitGroup{}
-	
-	sort.Strings(relays)
-	
-	for i, relay := range relays {
-		wg.Add(1)
-		go func(i int, relay string) {
-			relayurl, status, err := GetStatus(relay)
-			if err != nil {
-				relayData[i] = RelayInfo{Url: relayurl, Error: err}
-			} else {
-				relayData[i] = RelayInfo{Url: relayurl, Status: status}
+	relayData := []RelayInfo{}
+
+	db.View(func(tx *bolt.Tx) error {
+		timestats := tx.Bucket([]byte(`TIMESTATS`))
+		latestkey, _ := timestats.Cursor().Last()
+		latest := timestats.Bucket(latestkey)
+		latest.ForEach(func(k, v []byte) error {
+			var rs *RelayStatus
+			json.Unmarshal(v, &rs)
+			ri := RelayInfo{
+				Url:    string(k),
+				Status: rs,
 			}
-			wg.Done()
-		}(i, relay)
-	}
-	wg.Wait()
-	
-	err := mainTmpl.ExecuteTemplate(rw, "main", struct{
+			relayData = append(relayData, ri)
+			return nil
+		})
+		return nil
+	})
+
+	err := mainTmpl.ExecuteTemplate(rw, "main", struct {
 		Relays []RelayInfo
 	}{
 		Relays: relayData,
