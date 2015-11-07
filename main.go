@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"flag"
 	"fmt"
 	"html/template"
 	"io/ioutil"
@@ -12,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"flag"
 
 	"github.com/andyleap/boltinspect"
 	"github.com/boltdb/bolt"
@@ -65,20 +65,20 @@ func GetRelays() []string {
 }
 
 var (
-	db     *bolt.DB
+	db *bolt.DB
 	influx client.Client
 )
 
 func main() {
 	flag.Parse()
-
+	
 	u, _ := url.Parse("http://localhost:8086")
-	influx = client.NewClient(client.Config{
-		URL:      u,
-		Username: *influxUser,
-		Password: *influxPass,
-	})
-
+    influx = client.NewClient(client.Config{
+        URL: u,
+        Username: *influxUser,
+        Password: *influxPass,
+    })
+	
 	mainTmpl = template.Must(template.New("main").Funcs(template.FuncMap{
 		"Bytes": humanize.IBytes,
 	}).Parse(mainTmplText))
@@ -129,31 +129,48 @@ func WatchRelays() {
 			close(rchan)
 		}()
 		bp, _ := client.NewBatchPoints(client.BatchPointsConfig{
-			Database:  "syncthingrelay",
-			Precision: "s",
-		})
+	        Database:  "syncthingrelay",
+	        Precision: "s",
+	    })
 		allTime := time.Now()
+		fields := []map[string]interface{}{
+			map[string]interface{}{},
+			map[string]interface{}{},
+			map[string]interface{}{},
+			map[string]interface{}{},
+			map[string]interface{}{},
+			map[string]interface{}{},
+		}
+		
 		db.Update(func(tx *bolt.Tx) error {
 			timestats := tx.Bucket([]byte(`TIMESTATS`))
 			now, _ := timestats.CreateBucket([]byte(time.Now().Format(time.RFC3339)))
 			for ri := range rchan {
 				data, _ := json.Marshal(ri.Status)
 				now.Put([]byte(ri.Url), data)
-				tags := map[string]string{"relay": ri.Url}
-				fields := map[string]interface{}{
-					"10s": ri.Status.Rates[0],
-					"1m":  ri.Status.Rates[1],
-					"5m":  ri.Status.Rates[2],
-					"15m": ri.Status.Rates[3],
-					"30m": ri.Status.Rates[4],
-					"60m": ri.Status.Rates[5],
-				}
-				pt, _ := client.NewPoint("bandwidth", tags, fields, allTime)
-				bp.AddPoint(pt)
+			    fields[0][ri.Url] = ri.Status.Rates[0]
+				fields[0][ri.Url] = ri.Status.Rates[1]
+				fields[0][ri.Url] = ri.Status.Rates[2]
+				fields[0][ri.Url] = ri.Status.Rates[3]
+				fields[0][ri.Url] = ri.Status.Rates[4]
+				fields[0][ri.Url] = ri.Status.Rates[5]
+			    
 				wg.Done()
 			}
 			return nil
 		})
+		pt, _ := client.NewPoint("bandwidth-10s", nil, fields[0], allTime)
+		bp.AddPoint(pt)
+		pt, _ = client.NewPoint("bandwidth-1m", nil, fields[1], allTime)
+		bp.AddPoint(pt)
+		pt, _ = client.NewPoint("bandwidth-5m", nil, fields[2], allTime)
+		bp.AddPoint(pt)
+		pt, _ = client.NewPoint("bandwidth-15m", nil, fields[3], allTime)
+		bp.AddPoint(pt)
+		pt, _ = client.NewPoint("bandwidth-30m", nil, fields[4], allTime)
+		bp.AddPoint(pt)
+		pt, _ = client.NewPoint("bandwidth-60m", nil, fields[5], allTime)
+		bp.AddPoint(pt)
 		influx.Write(bp)
 		time.Sleep(5 * time.Second)
 	}
