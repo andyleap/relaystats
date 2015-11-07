@@ -11,17 +11,13 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"flag"
 
 	"github.com/andyleap/boltinspect"
 	"github.com/boltdb/bolt"
 	"github.com/dustin/go-humanize"
-	"github.com/influxdb/influxdb/client/v2"
 )
 
 var (
-	influxUser = flag.String("u", "", "InfluxDB User")
-	influxPass = flag.String("p", "", "InfluxDB Password")
 )
 
 type RelayStatus struct {
@@ -66,18 +62,10 @@ func GetRelays() []string {
 
 var (
 	db *bolt.DB
-	influx client.Client
 )
 
 func main() {
-	flag.Parse()
 	
-	u, _ := url.Parse("http://localhost:8086")
-    influx = client.NewClient(client.Config{
-        URL: u,
-        Username: *influxUser,
-        Password: *influxPass,
-    })
 	
 	mainTmpl = template.Must(template.New("main").Funcs(template.FuncMap{
 		"Bytes": humanize.IBytes,
@@ -127,51 +115,17 @@ func WatchRelays() {
 		go func() {
 			wg.Wait()
 			close(rchan)
-		}()
-		bp, _ := client.NewBatchPoints(client.BatchPointsConfig{
-	        Database:  "syncthingrelay",
-	        Precision: "s",
-	    })
-		allTime := time.Now()
-		fields := []map[string]interface{}{
-			map[string]interface{}{},
-			map[string]interface{}{},
-			map[string]interface{}{},
-			map[string]interface{}{},
-			map[string]interface{}{},
-			map[string]interface{}{},
-		}
-		
+		}()		
 		db.Update(func(tx *bolt.Tx) error {
 			timestats := tx.Bucket([]byte(`TIMESTATS`))
 			now, _ := timestats.CreateBucket([]byte(time.Now().Format(time.RFC3339)))
 			for ri := range rchan {
 				data, _ := json.Marshal(ri.Status)
-				now.Put([]byte(ri.Url), data)
-			    fields[0][ri.Url] = ri.Status.Rates[0]
-				fields[1][ri.Url] = ri.Status.Rates[1]
-				fields[2][ri.Url] = ri.Status.Rates[2]
-				fields[3][ri.Url] = ri.Status.Rates[3]
-				fields[4][ri.Url] = ri.Status.Rates[4]
-				fields[5][ri.Url] = ri.Status.Rates[5]
-			    
+				now.Put([]byte(ri.Url), data)			    
 				wg.Done()
 			}
 			return nil
 		})
-		pt, _ := client.NewPoint("bandwidth.10s", nil, fields[0], allTime)
-		bp.AddPoint(pt)
-		pt, _ = client.NewPoint("bandwidth.1m", nil, fields[1], allTime)
-		bp.AddPoint(pt)
-		pt, _ = client.NewPoint("bandwidth.5m", nil, fields[2], allTime)
-		bp.AddPoint(pt)
-		pt, _ = client.NewPoint("bandwidth.15m", nil, fields[3], allTime)
-		bp.AddPoint(pt)
-		pt, _ = client.NewPoint("bandwidth.30m", nil, fields[4], allTime)
-		bp.AddPoint(pt)
-		pt, _ = client.NewPoint("bandwidth.60m", nil, fields[5], allTime)
-		bp.AddPoint(pt)
-		influx.Write(bp)
 		time.Sleep(5 * time.Second)
 	}
 }
