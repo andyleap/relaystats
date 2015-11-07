@@ -149,27 +149,27 @@ func WatchRelays() {
 				data, _ := json.Marshal(ri.Status)
 				now.Put([]byte(ri.Url), data)
 			    fields[0][ri.Url] = ri.Status.Rates[0]
-				fields[0][ri.Url] = ri.Status.Rates[1]
-				fields[0][ri.Url] = ri.Status.Rates[2]
-				fields[0][ri.Url] = ri.Status.Rates[3]
-				fields[0][ri.Url] = ri.Status.Rates[4]
-				fields[0][ri.Url] = ri.Status.Rates[5]
+				fields[1][ri.Url] = ri.Status.Rates[1]
+				fields[2][ri.Url] = ri.Status.Rates[2]
+				fields[3][ri.Url] = ri.Status.Rates[3]
+				fields[4][ri.Url] = ri.Status.Rates[4]
+				fields[5][ri.Url] = ri.Status.Rates[5]
 			    
 				wg.Done()
 			}
 			return nil
 		})
-		pt, _ := client.NewPoint("bandwidth-10s", nil, fields[0], allTime)
+		pt, _ := client.NewPoint("bandwidth.10s", nil, fields[0], allTime)
 		bp.AddPoint(pt)
-		pt, _ = client.NewPoint("bandwidth-1m", nil, fields[1], allTime)
+		pt, _ = client.NewPoint("bandwidth.1m", nil, fields[1], allTime)
 		bp.AddPoint(pt)
-		pt, _ = client.NewPoint("bandwidth-5m", nil, fields[2], allTime)
+		pt, _ = client.NewPoint("bandwidth.5m", nil, fields[2], allTime)
 		bp.AddPoint(pt)
-		pt, _ = client.NewPoint("bandwidth-15m", nil, fields[3], allTime)
+		pt, _ = client.NewPoint("bandwidth.15m", nil, fields[3], allTime)
 		bp.AddPoint(pt)
-		pt, _ = client.NewPoint("bandwidth-30m", nil, fields[4], allTime)
+		pt, _ = client.NewPoint("bandwidth.30m", nil, fields[4], allTime)
 		bp.AddPoint(pt)
-		pt, _ = client.NewPoint("bandwidth-60m", nil, fields[5], allTime)
+		pt, _ = client.NewPoint("bandwidth.60m", nil, fields[5], allTime)
 		bp.AddPoint(pt)
 		influx.Write(bp)
 		time.Sleep(5 * time.Second)
