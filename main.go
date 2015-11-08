@@ -95,7 +95,7 @@ func main() {
 					history[string(relay)] = &RelayHistory{}
 				}
 				if rs.BytesProxied < history[string(relay)].LastBytesProxied {
-					rs.BytesProxied += history[string(relay)].LastBytesProxied
+					history[string(relay)].BytesProxied += history[string(relay)].LastBytesProxied
 				}
 				history[string(relay)].LastBytesProxied = rs.BytesProxied
 				return nil
@@ -144,13 +144,13 @@ func WatchRelays() {
 			for ri := range rchan {
 				data, _ := json.Marshal(ri.Status)
 				now.Put([]byte(ri.Url), data)
-				if _, ok := history[string(ri.Url)]; !ok {
-					history[string(ri.Url)] = &RelayHistory{}
+				if _, ok := history[ri.Url]; !ok {
+					history[ri.Url] = &RelayHistory{}
 				}
-				if ri.Status.BytesProxied < history[string(ri.Url)].LastBytesProxied {
-					ri.Status.BytesProxied += history[string(ri.Url)].LastBytesProxied
+				if ri.Status.BytesProxied < history[ri.Url].LastBytesProxied {
+					history[ri.Url].BytesProxied += history[ri.Url].LastBytesProxied
 				}
-				history[string(ri.Url)].LastBytesProxied = ri.Status.BytesProxied
+				history[ri.Url].LastBytesProxied = ri.Status.BytesProxied
 				wg.Done()
 			}
 			return nil
