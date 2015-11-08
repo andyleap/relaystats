@@ -55,16 +55,22 @@ func GetStatus(relay string) (relayurl string, status *RelayStatus, err error) {
 	return
 }
 
-func GetRelays() []string {
-	resp, _ := httpClient.Get("https://relays.syncthing.net/endpoint")
-	body, _ := ioutil.ReadAll(resp.Body)
+func GetRelays() ([]string, error) {
+	resp, err := httpClient.Get("https://relays.syncthing.net/endpoint")
+	if err != nil {
+		return nil, err
+	}
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
 	var relaydata map[string]interface{}
 	json.Unmarshal(body, &relaydata)
 	relays := []string{}
 	for _, relay := range relaydata["relays"].([]interface{}) {
 		relays = append(relays, (relay.(map[string]interface{}))["url"].(string))
 	}
-	return relays
+	return relays, nil
 }
 
 var (
@@ -122,7 +128,10 @@ func WatchRelays() {
 	relays := []string{}
 	for {
 		if time.Now().After(nextRelaysPoll) {
-			relays = GetRelays()
+			newrelays, err := GetRelays()
+			if err == nil {
+				relays = newrelays
+			}
 			nextRelaysPoll = nextRelaysPoll.Add(60 * time.Second)
 		}
 		rchan := make(chan *RelayInfo, 2)
