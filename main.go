@@ -18,7 +18,8 @@ import (
 )
 
 var (
-	history map[string]*RelayHistory
+	history    map[string]*RelayHistory
+	httpClient *http.Client
 )
 
 type RelayHistory struct {
@@ -42,7 +43,7 @@ func GetStatus(relay string) (relayurl string, status *RelayStatus, err error) {
 	host := strings.Split(purl.Host, ":")[0]
 	relayurl = purl.Host
 	statusUrl := fmt.Sprintf("http://%s%s/status", host, values.Get("statusAddr"))
-	resp, err := http.Get(statusUrl)
+	resp, err := httpClient.Get(statusUrl)
 	if err != nil {
 		return relayurl, nil, err
 	}
@@ -55,7 +56,7 @@ func GetStatus(relay string) (relayurl string, status *RelayStatus, err error) {
 }
 
 func GetRelays() []string {
-	resp, _ := http.Get("https://relays.syncthing.net/endpoint")
+	resp, _ := httpClient.Get("https://relays.syncthing.net/endpoint")
 	body, _ := ioutil.ReadAll(resp.Body)
 	var relaydata map[string]interface{}
 	json.Unmarshal(body, &relaydata)
@@ -72,6 +73,10 @@ var (
 
 func main() {
 	history = make(map[string]*RelayHistory)
+
+	httpClient = &http.Client{
+		Timeout: 3 * time.Second,
+	}
 
 	mainTmpl = template.Must(template.New("main").Funcs(template.FuncMap{
 		"Bytes": humanize.IBytes,
@@ -113,7 +118,7 @@ func main() {
 }
 
 func WatchRelays() {
-	nextRelaysPoll := time.Now()
+	nextRelaysPoll := time.Now().Add(-time.Second)
 	relays := []string{}
 	for {
 		if time.Now().After(nextRelaysPoll) {
