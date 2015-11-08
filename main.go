@@ -18,7 +18,13 @@ import (
 )
 
 var (
+	history map[string]*RelayHistory
 )
+
+type RelayHistory struct {
+	BytesProxied     uint64
+	LastBytesProxied uint64
+}
 
 type RelayStatus struct {
 	BytesProxied      uint64   `json:"bytesProxied"`
@@ -65,8 +71,8 @@ var (
 )
 
 func main() {
-	
-	
+	history = make(map[string]*RelayHistory)
+
 	mainTmpl = template.Must(template.New("main").Funcs(template.FuncMap{
 		"Bytes": humanize.IBytes,
 	}).Parse(mainTmplText))
@@ -79,7 +85,23 @@ func main() {
 	}
 
 	db.Update(func(tx *bolt.Tx) error {
-		tx.CreateBucketIfNotExists([]byte(`TIMESTATS`))
+		timestats, _ := tx.CreateBucketIfNotExists([]byte(`TIMESTATS`))
+		timestats.ForEach(func(k, v []byte) error {
+			timestat := timestats.Bucket(k)
+			timestat.ForEach(func(relay, v []byte) error {
+				var rs *RelayStatus
+				json.Unmarshal(v, &rs)
+				if _, ok := history[string(relay)]; !ok {
+					history[string(relay)] = &RelayHistory{}
+				}
+				if rs.BytesProxied < history[string(relay)].LastBytesProxied {
+					rs.BytesProxied += history[string(relay)].LastBytesProxied
+				}
+				history[string(relay)].LastBytesProxied = rs.BytesProxied
+				return nil
+			})
+			return nil
+		})
 		return nil
 	})
 
@@ -115,13 +137,20 @@ func WatchRelays() {
 		go func() {
 			wg.Wait()
 			close(rchan)
-		}()		
+		}()
 		db.Update(func(tx *bolt.Tx) error {
 			timestats := tx.Bucket([]byte(`TIMESTATS`))
 			now, _ := timestats.CreateBucket([]byte(time.Now().Format(time.RFC3339)))
 			for ri := range rchan {
 				data, _ := json.Marshal(ri.Status)
-				now.Put([]byte(ri.Url), data)			    
+				now.Put([]byte(ri.Url), data)
+				if _, ok := history[string(ri.Url)]; !ok {
+					history[string(ri.Url)] = &RelayHistory{}
+				}
+				if ri.Status.BytesProxied < history[string(ri.Url)].LastBytesProxied {
+					ri.Status.BytesProxied += history[string(ri.Url)].LastBytesProxied
+				}
+				history[string(ri.Url)].LastBytesProxied = ri.Status.BytesProxied
 				wg.Done()
 			}
 			return nil
@@ -181,6 +210,7 @@ func Status(rw http.ResponseWriter, req *http.Request) {
 		latest.ForEach(func(k, v []byte) error {
 			var rs *RelayStatus
 			json.Unmarshal(v, &rs)
+			rs.BytesProxied += history[string(k)].BytesProxied
 			ri := RelayInfo{
 				Url:    string(k),
 				Status: rs,
@@ -199,9 +229,9 @@ func Status(rw http.ResponseWriter, req *http.Request) {
 		})
 		return nil
 	})
-	
+
 	relayData = append(relayData, RelayInfo{
-		Url: "Totals",
+		Url:    "Totals",
 		Status: relayTotal,
 	})
 
